@@ -30,6 +30,8 @@ models_by_digit = load_ova_models(BASE_DIR)
 stroke_width = st.sidebar.slider("Brush Size", 10, 40, 25)
 
 # Drawing Canvas
+
+# 3. Interactive Drawing Canvas (280x280)
 st.write("Draw a single digit (0-9) below:")
 canvas_result = st_canvas(
     fill_color="rgba(255, 255, 255, 0)",
@@ -40,6 +42,8 @@ canvas_result = st_canvas(
     width=280,
     drawing_mode="freedraw",
     key="ova_canvas",
+    update_streamlit=True,
+    return_image_data=True,  # Explicitly enables passing image bytes back to Python
 )
 
 if st.button("Predict"):
