@@ -7,7 +7,23 @@ from streamlit_drawable_canvas import st_canvas
 
 # 1. Page Config
 st.set_page_config(page_title="OvA Digit Classifier", layout="centered")
-st.title("One-vs-All Digit Classifier")
+
+# Custom CSS to shrink button padding and font size
+st.markdown(
+    """
+    <style>
+    div.stButton > button {
+        padding: 2px 10px !important;
+        font-size: 13px !important;
+        min-height: 0px !important;
+    }
+    </style>
+""",
+    unsafe_allow_html=True,
+)
+
+# Smaller title (Markdown header instead of st.title)
+st.markdown("### One-vs-All Digit Classifier")
 
 # 2. State management for resetting the canvas
 if "canvas_key" not in st.session_state:
@@ -27,7 +43,6 @@ def load_ova_models(model_dir):
     return models
 
 
-# Load all 10 models once
 models_by_digit = load_ova_models(BASE_DIR)
 
 # 3. Sidebar Controls
@@ -49,21 +64,20 @@ canvas_result = st_canvas(
     return_image_data=True,
 )
 
-# 5. Action Buttons
-col1, col2 = st.columns(2)
+# 5. Compact Action Buttons (narrow column allocations, default width)
+col1, col2, _ = st.columns([0.2, 0.25, 0.55])
 
 with col1:
-    predict_clicked = st.button("Predict", type="primary", use_container_width=True)
+    predict_clicked = st.button("Predict", type="primary")
 
 with col2:
-    if st.button("Clear Canvas", use_container_width=True):
+    if st.button("Clear Canvas"):
         st.session_state["canvas_key"] += 1
         st.rerun()
 
 # 6. Extraction & Ensemble Prediction
 if predict_clicked:
     if canvas_result.image_data is not None:
-        # Extract RGBA numpy array and convert to 28x28 grayscale feature array
         rgba_array = canvas_result.image_data.astype("uint8")
         img = Image.fromarray(rgba_array)
         img_gray = img.convert("L").resize((28, 28), Image.Resampling.LANCZOS)
@@ -73,7 +87,6 @@ if predict_clicked:
         scores = {}
         signals_detected = 0
 
-        # Run inference across all 10 OvA binary models
         for digit_signal in range(10):
             model = models_by_digit[digit_signal]
             pred = model.predict(features)[0]
@@ -85,10 +98,8 @@ if predict_clicked:
             if pred == "signal":
                 signals_detected += 1
 
-        # Winning digit has the maximum decision score distance
         best_digit = max(scores, key=scores.get)
 
-        # Output Results
         if signals_detected == 0:
             st.warning(
                 f"No binary model triggered 'signal'. **Closest match: Digit {best_digit}**"
@@ -98,7 +109,6 @@ if predict_clicked:
                 f"### Predicted Digit: **{best_digit}** ({signals_detected} model(s) claimed signal)"
             )
 
-        # Detailed breakdown per model
         with st.expander("See individual model votes & scores"):
             for digit in range(10):
                 vote = binary_votes[digit]
