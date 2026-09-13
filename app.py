@@ -46,39 +46,56 @@ estimator = load_classifier(MODEL_FILE)
 # ==============================================================================
 # 3. HELPER FUNCTION: BOUNDING BOX CENTERING
 # ==============================================================================
+from scipy.ndimage import center_of_mass
+
+
 def center_digit_image(img_28x28):
-    """Centers a drawn digit inside the 28x28 frame using bounding-box alignment.
+    """Preprocesses drawn images to strictly match original MNIST specs:
 
-    MNIST models perform best when strokes are centered rather than drawn in
-    corners.
+    1. Fits digit inside a 20x20 box (preserving aspect ratio).
+    2. Centers the digit using Center of Mass (intensity centroid).
     """
-    # Step 1: Find coordinates of non-background pixels (threshold brightness > 0.05)
+    # 1. Find bounding box of non-zero pixels
     rows, cols = np.where(img_28x28 > 0.05)
-
-    # Return original image if canvas is blank
     if len(rows) == 0 or len(cols) == 0:
         return img_28x28
 
-    # Step 2: Find the bounding box boundaries of the drawing
     row_min, row_max = rows.min(), rows.max()
     col_min, col_max = cols.min(), cols.max()
 
-    # Step 3: Crop only the drawn region
-    digit_crop = img_28x28[row_min : row_max + 1, col_min : col_max + 1]
-    crop_h, crop_w = digit_crop.shape
+    # Crop digit
+    crop = img_28x28[row_min : row_max + 1, col_min : col_max + 1]
+    crop_h, crop_w = crop.shape
 
-    # Step 4: Calculate offsets to place the crop in the center of a blank 28x28 frame
-    start_row = (28 - crop_h) // 2
-    start_col = (28 - crop_w) // 2
+    # 2. Rescale crop to fit within a 20x20 box (MNIST standard)
+    if crop_h > crop_w:
+        new_h = 20
+        new_w = max(1, int(round((crop_w / crop_h) * 20)))
+    else:
+        new_w = 20
+        new_h = max(1, int(round((crop_h / crop_w) * 20)))
 
-    # Step 5: Create blank black grid and paste cropped digit into the middle
-    centered_img = np.zeros((28, 28), dtype=np.float32)
-    centered_img[
-        start_row : start_row + crop_h, start_col : start_col + crop_w
-    ] = digit_crop
+    crop_img = Image.fromarray((crop * 255).astype(np.uint8))
+    resized_crop = crop_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+    resized_arr = np.array(resized_crop) / 255.0
 
-    return centered_img
+    # 3. Place in center of a blank 28x28 canvas
+    canvas_28x28 = np.zeros((28, 28), dtype=np.float32)
+    start_r = (28 - new_h) // 2
+    start_c = (28 - new_w) // 2
+    canvas_28x28[
+        start_r : start_r + new_h, start_c : start_c + new_w
+    ] = resized_arr
 
+    # 4. Shift image so its Center of Mass sits at (13.5, 13.5)
+    cy, cx = center_of_mass(canvas_28x28)
+    if not np.isnan(cy) and not np.isnan(cx):
+        shift_y = int(round(13.5 - cy))
+        shift_x = int(round(13.5 - cx))
+        canvas_28x28 = np.roll(canvas_28x28, shift_y, axis=0)
+        canvas_28x28 = np.roll(canvas_28x28, shift_x, axis=1)
+
+    return canvas_28x28
 
 # ==============================================================================
 # 4. USER INTERFACE (SIDEBAR & CANVAS)
