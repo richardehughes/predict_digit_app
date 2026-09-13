@@ -1,15 +1,17 @@
+import os
 import joblib
 import numpy as np
 from PIL import Image
+from scipy.ndimage import center_of_mass
 import streamlit as st
 from streamlit_drawable_canvas import st_canvas
 
 # ==============================================================================
 # 1. PAGE CONFIGURATION & STYLING
 # ==============================================================================
-st.set_page_config(page_title="Digit Classifier", layout="centered")
+st.set_page_config(page_title="Multi-Class Digit Classifier", layout="centered")
 
-# Custom CSS to shrink button padding
+# Custom CSS for compact buttons
 st.markdown(
     """
     <style>
@@ -23,7 +25,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.markdown("#### Digit Classifier")
+st.markdown("### Multi-Class Digit Classifier")
 
 # ==============================================================================
 # 2. STATE MANAGEMENT & MODEL LOADING
@@ -31,31 +33,68 @@ st.markdown("#### Digit Classifier")
 if "canvas_key" not in st.session_state:
     st.session_state["canvas_key"] = 0
 
-MODEL_FILE = "models/svc_mnist_digit_classifier_58k.joblib"
+STANDARD_MODEL_PATH = "models/svc_mnist_digit_classifier.joblib"
+HIGH_PREC_MODEL_PATH = "models/svc_mnist_digit_classifier_58k.joblib"
 
 
+# @st.cache_resource caches both models in RAM so switching between them is instant
 @st.cache_resource
 def load_classifier(model_path):
-    """Loads pre-trained Multi-class SVC model from disk."""
+    """Loads a pre-trained Multi-class SVC model from disk."""
     return joblib.load(model_path)
 
 
-estimator = load_classifier(MODEL_FILE)
+# Helper function to find a model file in 'models/' or root directory
+def resolve_model_path(path):
+    if os.path.exists(path):
+        return path
+    # Check if file exists in root instead of models/ directory
+    base_name = os.path.basename(path)
+    if os.path.exists(base_name):
+        return base_name
+    return None
 
 
 # ==============================================================================
-# 3. HELPER FUNCTION: BOUNDING BOX CENTERING
+# 3. SIDEBAR CONTROLS & MODEL SELECTION
 # ==============================================================================
-from scipy.ndimage import center_of_mass
+st.sidebar.header("Controls & Settings")
+stroke_width = st.sidebar.slider("Brush Size", 10, 40, 25)
+enable_centering = st.sidebar.checkbox("Enable MNIST Auto-Centering", value=True)
+
+# Model selection checkbox (Default: Unchecked)
+use_high_prec = st.sidebar.checkbox("Use High-Precision Model (58k)", value=False)
+
+# Determine which model file to load
+selected_path = None
+if use_high_prec:
+    resolved_high_prec = resolve_model_path(HIGH_PREC_MODEL_PATH)
+    if resolved_high_prec:
+        selected_path = resolved_high_prec
+    else:
+        st.sidebar.info(
+            "High-precision model (`58k`) file not found. Falling back to standard model."
+        )
+        selected_path = resolve_model_path(STANDARD_MODEL_PATH)
+else:
+    selected_path = resolve_model_path(STANDARD_MODEL_PATH)
+
+# Load the active model
+if selected_path and os.path.exists(selected_path):
+    estimator = load_classifier(selected_path)
+else:
+    st.error("No valid model file found! Please verify your model path.")
 
 
+# ==============================================================================
+# 4. HELPER FUNCTION: TRUE MNIST CENTERING & RESIZING
+# ==============================================================================
 def center_digit_image(img_28x28):
-    """Preprocesses drawn images to strictly match original MNIST specs:
+    """Preprocesses drawn images to match original 1990s MNIST specs:
 
-    1. Fits digit inside a 20x20 box (preserving aspect ratio).
+    1. Scales stroke into a 20x20 box (preserving aspect ratio).
     2. Centers the digit using Center of Mass (intensity centroid).
     """
-    # 1. Find bounding box of non-zero pixels
     rows, cols = np.where(img_28x28 > 0.05)
     if len(rows) == 0 or len(cols) == 0:
         return img_28x28
@@ -63,11 +102,10 @@ def center_digit_image(img_28x28):
     row_min, row_max = rows.min(), rows.max()
     col_min, col_max = cols.min(), cols.max()
 
-    # Crop digit
     crop = img_28x28[row_min : row_max + 1, col_min : col_max + 1]
     crop_h, crop_w = crop.shape
 
-    # 2. Rescale crop to fit within a 20x20 box (MNIST standard)
+    # Scale to fit inside 20x20 box
     if crop_h > crop_w:
         new_h = 20
         new_w = max(1, int(round((crop_w / crop_h) * 20)))
@@ -79,7 +117,6 @@ def center_digit_image(img_28x28):
     resized_crop = crop_img.resize((new_w, new_h), Image.Resampling.LANCZOS)
     resized_arr = np.array(resized_crop) / 255.0
 
-    # 3. Place in center of a blank 28x28 canvas
     canvas_28x28 = np.zeros((28, 28), dtype=np.float32)
     start_r = (28 - new_h) // 2
     start_c = (28 - new_w) // 2
@@ -87,7 +124,7 @@ def center_digit_image(img_28x28):
         start_r : start_r + new_h, start_c : start_c + new_w
     ] = resized_arr
 
-    # 4. Shift image so its Center of Mass sits at (13.5, 13.5)
+    # Center of mass alignment
     cy, cx = center_of_mass(canvas_28x28)
     if not np.isnan(cy) and not np.isnan(cx):
         shift_y = int(round(13.5 - cy))
@@ -97,12 +134,10 @@ def center_digit_image(img_28x28):
 
     return canvas_28x28
 
-# ==============================================================================
-# 4. USER INTERFACE (SIDEBAR & CANVAS)
-# ==============================================================================
-stroke_width = st.sidebar.slider("Brush Size", 10, 40, 25)
-enable_centering = st.sidebar.checkbox("Enable Auto-Centering", value=True)
 
+# ==============================================================================
+# 5. USER INTERFACE (CANVAS & BUTTONS)
+# ==============================================================================
 st.write("Draw a single digit (0-9) below:")
 
 canvas_result = st_canvas(
@@ -129,36 +164,28 @@ with col2:
         st.rerun()
 
 # ==============================================================================
-# 5. PREPROCESSING & INFERENCE LOGIC
+# 6. PREPROCESSING & INFERENCE LOGIC
 # ==============================================================================
 if predict_clicked:
     if canvas_result.image_data is not None:
-        # STEP A: Extract raw 280x280 RGBA array from canvas
         rgba_array = canvas_result.image_data.astype("uint8")
-
-        # STEP B: Convert to Grayscale ('L') and downsample to 28x28
         img = Image.fromarray(rgba_array)
         img_gray = img.convert("L").resize((28, 28), Image.Resampling.LANCZOS)
         raw_28x28 = np.array(img_gray) / 255.0
 
-        # STEP C: Apply Centering Preprocessing (if toggled)
         if enable_centering:
             final_28x28 = center_digit_image(raw_28x28)
         else:
             final_28x28 = raw_28x28
 
-        # STEP D: Flatten 28x28 matrix to (1, 784) for sklearn estimator input
         df_test_features = final_28x28.reshape(1, -1)
 
-        # STEP E: Run Model Prediction & Decision Scores
         labels = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
         predicted_class = estimator.predict(df_test_features)[0]
         decision_scores = estimator.decision_function(df_test_features)[0]
 
-        # STEP F: Display Results & Image Preview
         st.success(f"### Predicted Digit: **{predicted_class}**")
 
-        # Visual preview of what the model actually receives
         preview_col1, preview_col2 = st.columns(2)
         with preview_col1:
             st.write("**Model Input (28x28 Grid):**")
