@@ -31,7 +31,7 @@ st.markdown("### Multi-Class Digit Classifier")
 if "canvas_key" not in st.session_state:
     st.session_state["canvas_key"] = 0
 
-MODEL_FILE = "svc_mnist_digit_classifier.joblib"
+MODEL_FILE = "models/svc_mnist_digit_classifier.joblib"
 
 
 @st.cache_resource
