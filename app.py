@@ -7,7 +7,7 @@ from streamlit_drawable_canvas import st_canvas
 # ==============================================================================
 # 1. PAGE CONFIGURATION & STYLING
 # ==============================================================================
-st.set_page_config(page_title="Multi-Class Digit Classifier", layout="centered")
+st.set_page_config(page_title="Digit Classifier", layout="centered")
 
 # Custom CSS to shrink button padding
 st.markdown(
@@ -23,7 +23,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.markdown("### Multi-Class Digit Classifier")
+st.markdown("#### Digit Classifier")
 
 # ==============================================================================
 # 2. STATE MANAGEMENT & MODEL LOADING
