@@ -1,14 +1,15 @@
-import os
 import joblib
 import numpy as np
 from PIL import Image
 import streamlit as st
 from streamlit_drawable_canvas import st_canvas
 
-# 1. Page Config
-st.set_page_config(page_title="OvA Digit Classifier", layout="centered")
+# ==============================================================================
+# 1. PAGE CONFIGURATION & STYLING
+# ==============================================================================
+st.set_page_config(page_title="Multi-Class Digit Classifier", layout="centered")
 
-# Custom CSS to shrink button padding and font size
+# Custom CSS to shrink button padding and make UI compact for classroom use
 st.markdown(
     """
     <style>
@@ -22,49 +23,53 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Smaller title (Markdown header instead of st.title)
-st.markdown("### One-vs-All Digit Classifier")
+# Compact title
+st.markdown("### Multi-Class Digit Classifier")
 
-# 2. State management for resetting the canvas
+# ==============================================================================
+# 2. STATE MANAGEMENT & MODEL LOADING
+# ==============================================================================
+# Canvas Key Trick: Streamlit rebuilds widgets when their 'key' changes.
+# Incrementing 'canvas_key' forces Streamlit to clear and reset the drawing area.
 if "canvas_key" not in st.session_state:
     st.session_state["canvas_key"] = 0
 
-BASE_DIR = "models"
+MODEL_FILE = "models/svc_mnist_digit_classifier.joblib"
 
 
+# @st.cache_resource prevents Streamlit from reloading the model file on every user interaction
 @st.cache_resource
-def load_ova_models(model_dir):
-    models = {}
-    for digit in range(10):
-        file_path = os.path.join(
-            model_dir, f"mnist_svc_digit_{digit}_vs_all.joblib"
-        )
-        models[digit] = joblib.load(file_path)
-    return models
+def load_classifier(model_path):
+    """Loads the pre-trained Multi-class SVC model from disk."""
+    return joblib.load(model_path)
 
 
-models_by_digit = load_ova_models(BASE_DIR)
+# Load the single estimator model
+estimator = load_classifier(MODEL_FILE)
 
-# 3. Sidebar Controls
+# ==============================================================================
+# 3. USER INTERFACE (SIDEBAR & CANVAS)
+# ==============================================================================
+# Sidebar slider allowing students to experiment with brush stroke thickness
 stroke_width = st.sidebar.slider("Brush Size", 10, 40, 25)
 
 st.write("Draw a single digit (0-9) below:")
 
-# 4. Interactive Drawing Canvas (280x280)
+# Interactive 280x280 Canvas widget
 canvas_result = st_canvas(
-    fill_color="rgba(255, 255, 255, 0)",
+    fill_color="rgba(255, 255, 255, 0)",  # Transparent fill
     stroke_width=stroke_width,
-    stroke_color="#FFFFFF",
-    background_color="#000000",
+    stroke_color="#FFFFFF",  # White brush (MNIST standard)
+    background_color="#000000",  # Black canvas (MNIST standard)
     height=280,
     width=280,
     drawing_mode="freedraw",
-    key=f"ova_canvas_{st.session_state['canvas_key']}",
+    key=f"digit_canvas_{st.session_state['canvas_key']}",
     update_streamlit=True,
-    return_image_data=True,
+    return_image_data=True,  # Sends RGBA pixel array back to Python
 )
 
-# 5. Compact Action Buttons (narrow column allocations, default width)
+# Compact Action Buttons using fractional columns
 col1, col2, _ = st.columns([0.2, 0.25, 0.55])
 
 with col1:
@@ -72,49 +77,50 @@ with col1:
 
 with col2:
     if st.button("Clear Canvas"):
+        # Incrementing the key forces Streamlit to re-render a blank canvas
         st.session_state["canvas_key"] += 1
         st.rerun()
 
-# 6. Extraction & Ensemble Prediction
+# ==============================================================================
+# 4. PREPROCESSING & INFERENCE LOGIC
+# ==============================================================================
 if predict_clicked:
     if canvas_result.image_data is not None:
+        # STEP A: Extract raw 280x280 RGBA array from canvas
         rgba_array = canvas_result.image_data.astype("uint8")
+
+        # STEP B: Convert to Grayscale ('L') and downsample to 28x28 pixel grid
+        # Resampling.LANCZOS creates smooth anti-aliasing similar to original MNIST dataset
         img = Image.fromarray(rgba_array)
         img_gray = img.convert("L").resize((28, 28), Image.Resampling.LANCZOS)
-        features = (np.array(img_gray) / 255.0).reshape(1, -1)
 
-        binary_votes = {}
-        scores = {}
-        signals_detected = 0
+        # STEP C: Feature Normalization & Reshaping
+        # 1. Convert pixels from integers [0, 255] to floats [0.0, 1.0]
+        # 2. Flatten 28x28 matrix into 1D array of 784 features, shaped (1, 784) for sklearn
+        df_test_features = (np.array(img_gray) / 255.0).reshape(1, -1)
 
-        for digit_signal in range(10):
-            model = models_by_digit[digit_signal]
-            pred = model.predict(features)[0]
-            score = model.decision_function(features)[0]
+        # STEP D: Run Model Prediction & Decision Scores
+        labels = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
 
-            binary_votes[digit_signal] = pred
-            scores[digit_signal] = score
+        # 1. Predict class label directly (returns integer 0-9)
+        predicted_class = estimator.predict(df_test_features)[0]
 
-            if pred == "signal":
-                signals_detected += 1
+        # 2. Get decision function scores across all 10 classes
+        # For multi-class SVC, decision_function returns distance to hyperplanes for each class
+        decision_scores = estimator.decision_function(df_test_features)[0]
 
-        best_digit = max(scores, key=scores.get)
+        # STEP E: Display Results
+        st.success(f"### Predicted Digit: **{predicted_class}**")
 
-        if signals_detected == 0:
-            st.warning(
-                f"No binary model triggered 'signal'. **Closest match: Digit {best_digit}**"
-            )
-        else:
-            st.success(
-                f"### Predicted Digit: **{best_digit}** ({signals_detected} model(s) claimed signal)"
+        # Display raw decision function scores in an expandable section
+        with st.expander("See Class Decision Scores"):
+            st.write(
+                "Higher (more positive) scores indicate greater model confidence for that digit class:"
             )
 
-        with st.expander("See individual model votes & scores"):
-            for digit in range(10):
-                vote = binary_votes[digit]
-                dist = scores[digit]
-                st.write(
-                    f"**Digit {digit} Model:** Vote = `{vote}` | Decision Distance = `{dist:.3f}`"
-                )
+            # Iterate over the 10 digit classes and show calculated confidence score
+            for digit in labels:
+                score = decision_scores[digit]
+                st.write(f"**Digit {digit}:** Decision Score = `{score:.3f}`")
     else:
-        st.warning("Please draw a digit before predicting.")
+        st.warning("Please draw a digit on the canvas before predicting.")
