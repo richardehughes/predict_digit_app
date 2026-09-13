@@ -9,7 +9,7 @@ from streamlit_drawable_canvas import st_canvas
 # ==============================================================================
 st.set_page_config(page_title="Multi-Class Digit Classifier", layout="centered")
 
-# Custom CSS to shrink button padding and make UI compact for classroom use
+# Custom CSS to shrink button padding
 st.markdown(
     """
     <style>
@@ -23,53 +23,84 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Compact title
 st.markdown("### Multi-Class Digit Classifier")
 
 # ==============================================================================
 # 2. STATE MANAGEMENT & MODEL LOADING
 # ==============================================================================
-# Canvas Key Trick: Streamlit rebuilds widgets when their 'key' changes.
-# Incrementing 'canvas_key' forces Streamlit to clear and reset the drawing area.
 if "canvas_key" not in st.session_state:
     st.session_state["canvas_key"] = 0
 
-MODEL_FILE = "models/svc_mnist_digit_classifier.joblib"
+MODEL_FILE = "svc_mnist_digit_classifier.joblib"
 
 
-# @st.cache_resource prevents Streamlit from reloading the model file on every user interaction
 @st.cache_resource
 def load_classifier(model_path):
-    """Loads the pre-trained Multi-class SVC model from disk."""
+    """Loads pre-trained Multi-class SVC model from disk."""
     return joblib.load(model_path)
 
 
-# Load the single estimator model
 estimator = load_classifier(MODEL_FILE)
 
+
 # ==============================================================================
-# 3. USER INTERFACE (SIDEBAR & CANVAS)
+# 3. HELPER FUNCTION: BOUNDING BOX CENTERING
 # ==============================================================================
-# Sidebar slider allowing students to experiment with brush stroke thickness
+def center_digit_image(img_28x28):
+    """Centers a drawn digit inside the 28x28 frame using bounding-box alignment.
+
+    MNIST models perform best when strokes are centered rather than drawn in
+    corners.
+    """
+    # Step 1: Find coordinates of non-background pixels (threshold brightness > 0.05)
+    rows, cols = np.where(img_28x28 > 0.05)
+
+    # Return original image if canvas is blank
+    if len(rows) == 0 or len(cols) == 0:
+        return img_28x28
+
+    # Step 2: Find the bounding box boundaries of the drawing
+    row_min, row_max = rows.min(), rows.max()
+    col_min, col_max = cols.min(), cols.max()
+
+    # Step 3: Crop only the drawn region
+    digit_crop = img_28x28[row_min : row_max + 1, col_min : col_max + 1]
+    crop_h, crop_w = digit_crop.shape
+
+    # Step 4: Calculate offsets to place the crop in the center of a blank 28x28 frame
+    start_row = (28 - crop_h) // 2
+    start_col = (28 - crop_w) // 2
+
+    # Step 5: Create blank black grid and paste cropped digit into the middle
+    centered_img = np.zeros((28, 28), dtype=np.float32)
+    centered_img[
+        start_row : start_row + crop_h, start_col : start_col + crop_w
+    ] = digit_crop
+
+    return centered_img
+
+
+# ==============================================================================
+# 4. USER INTERFACE (SIDEBAR & CANVAS)
+# ==============================================================================
 stroke_width = st.sidebar.slider("Brush Size", 10, 40, 25)
+enable_centering = st.sidebar.checkbox("Enable Auto-Centering", value=True)
 
 st.write("Draw a single digit (0-9) below:")
 
-# Interactive 280x280 Canvas widget
 canvas_result = st_canvas(
-    fill_color="rgba(255, 255, 255, 0)",  # Transparent fill
+    fill_color="rgba(255, 255, 255, 0)",
     stroke_width=stroke_width,
-    stroke_color="#FFFFFF",  # White brush (MNIST standard)
-    background_color="#000000",  # Black canvas (MNIST standard)
+    stroke_color="#FFFFFF",
+    background_color="#000000",
     height=280,
     width=280,
     drawing_mode="freedraw",
     key=f"digit_canvas_{st.session_state['canvas_key']}",
     update_streamlit=True,
-    return_image_data=True,  # Sends RGBA pixel array back to Python
+    return_image_data=True,
 )
 
-# Compact Action Buttons using fractional columns
 col1, col2, _ = st.columns([0.2, 0.25, 0.55])
 
 with col1:
@@ -77,50 +108,55 @@ with col1:
 
 with col2:
     if st.button("Clear Canvas"):
-        # Incrementing the key forces Streamlit to re-render a blank canvas
         st.session_state["canvas_key"] += 1
         st.rerun()
 
 # ==============================================================================
-# 4. PREPROCESSING & INFERENCE LOGIC
+# 5. PREPROCESSING & INFERENCE LOGIC
 # ==============================================================================
 if predict_clicked:
     if canvas_result.image_data is not None:
         # STEP A: Extract raw 280x280 RGBA array from canvas
         rgba_array = canvas_result.image_data.astype("uint8")
 
-        # STEP B: Convert to Grayscale ('L') and downsample to 28x28 pixel grid
-        # Resampling.LANCZOS creates smooth anti-aliasing similar to original MNIST dataset
+        # STEP B: Convert to Grayscale ('L') and downsample to 28x28
         img = Image.fromarray(rgba_array)
         img_gray = img.convert("L").resize((28, 28), Image.Resampling.LANCZOS)
+        raw_28x28 = np.array(img_gray) / 255.0
 
-        # STEP C: Feature Normalization & Reshaping
-        # 1. Convert pixels from integers [0, 255] to floats [0.0, 1.0]
-        # 2. Flatten 28x28 matrix into 1D array of 784 features, shaped (1, 784) for sklearn
-        df_test_features = (np.array(img_gray) / 255.0).reshape(1, -1)
+        # STEP C: Apply Centering Preprocessing (if toggled)
+        if enable_centering:
+            final_28x28 = center_digit_image(raw_28x28)
+        else:
+            final_28x28 = raw_28x28
 
-        # STEP D: Run Model Prediction & Decision Scores
+        # STEP D: Flatten 28x28 matrix to (1, 784) for sklearn estimator input
+        df_test_features = final_28x28.reshape(1, -1)
+
+        # STEP E: Run Model Prediction & Decision Scores
         labels = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-
-        # 1. Predict class label directly (returns integer 0-9)
         predicted_class = estimator.predict(df_test_features)[0]
-
-        # 2. Get decision function scores across all 10 classes
-        # For multi-class SVC, decision_function returns distance to hyperplanes for each class
         decision_scores = estimator.decision_function(df_test_features)[0]
 
-        # STEP E: Display Results
+        # STEP F: Display Results & Image Preview
         st.success(f"### Predicted Digit: **{predicted_class}**")
 
-        # Display raw decision function scores in an expandable section
-        with st.expander("See Class Decision Scores"):
+        # Visual preview of what the model actually receives
+        preview_col1, preview_col2 = st.columns(2)
+        with preview_col1:
+            st.write("**Model Input (28x28 Grid):**")
+            st.image(final_28x28, width=140, clamp=True)
+
+        with preview_col2:
+            st.write("**Decision Scores:**")
+            best_digit = int(predicted_class)
             st.write(
-                "Higher (more positive) scores indicate greater model confidence for that digit class:"
+                f"Top Digit ({best_digit}) Score: `{decision_scores[best_digit]:.3f}`"
             )
 
-            # Iterate over the 10 digit classes and show calculated confidence score
+        with st.expander("See All Class Decision Scores"):
             for digit in labels:
                 score = decision_scores[digit]
-                st.write(f"**Digit {digit}:** Decision Score = `{score:.3f}`")
+                st.write(f"**Digit {digit}:** Score = `{score:.3f}`")
     else:
         st.warning("Please draw a digit on the canvas before predicting.")
